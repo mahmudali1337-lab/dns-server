@@ -10,6 +10,8 @@ zones:
         ip: "198.46.199.132"
       - name: "ns3"
         ip: "213.177.179.55"
+      - name: "ns4"
+        ip: "77.90.185.102"
     mx:
       - priority: 10
         host: "mail.dstat.coffee"
