@@ -1,12 +1,12 @@
 ﻿listen: ":53"
 zones:
   - domain: "dstat.coffee"
-    ip: "1.2.3.4"
+    ip: "172.245.14.250"
     ttl: 300
     subs:
       - name: "www"
-        ip: "1.2.3.4"
+        ip: "172.245.14.250"
       - name: "mail"
-        ip: "1.2.3.4"
+        ip: "172.245.14.250"
       - name: "api"
-        ip: "1.2.3.4"
+        ip: "172.245.14.250"

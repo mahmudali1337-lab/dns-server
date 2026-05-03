@@ -1,11 +1,13 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/miekg/dns"
 	"gopkg.in/yaml.v3"
@@ -41,6 +43,11 @@ type Sub struct {
 }
 
 var zones []Zone
+
+func soaSerial() uint32 {
+	t := time.Now().UTC()
+	return uint32(t.Year()*1000000 + int(t.Month())*10000 + t.Day()*100)
+}
 
 func splitTXT(s string) []string {
 	var chunks []string
@@ -123,7 +130,7 @@ func handle(w dns.ResponseWriter, r *dns.Msg) {
 						Hdr:     hdr(fqdn, dns.TypeSOA),
 						Ns:      ns,
 						Mbox:    dns.Fqdn("admin." + zone.Domain),
-						Serial:  2026050302,
+						Serial:  soaSerial(),
 						Refresh: 3600,
 						Retry:   900,
 						Expire:  604800,
@@ -211,6 +218,47 @@ func handle(w dns.ResponseWriter, r *dns.Msg) {
 
 		if !answered {
 			msg.SetRcode(r, dns.RcodeNameError)
+			// RFC 2308: add SOA in authority section for NXDOMAIN so resolvers can cache negative responses
+			for _, zone := range zones {
+				if dns.IsSubDomain(dns.Fqdn(zone.Domain), q.Name) {
+					ttl := zone.TTL
+					if ttl == 0 {
+						ttl = 300
+					}
+					msg.Ns = append(msg.Ns, &dns.SOA{
+						Hdr:     dns.RR_Header{Name: dns.Fqdn(zone.Domain), Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: ttl},
+						Ns:      dns.Fqdn("ns." + zone.Domain),
+						Mbox:    dns.Fqdn("admin." + zone.Domain),
+						Serial:  soaSerial(),
+						Refresh: 3600,
+						Retry:   900,
+						Expire:  604800,
+						Minttl:  ttl,
+					})
+					break
+				}
+			}
+		} else if len(msg.Answer) == 0 {
+			// RFC 2308: NODATA — name exists but no records of this type; add SOA to authority
+			for _, zone := range zones {
+				if dns.IsSubDomain(dns.Fqdn(zone.Domain), q.Name) || dns.Fqdn(zone.Domain) == q.Name {
+					ttl := zone.TTL
+					if ttl == 0 {
+						ttl = 300
+					}
+					msg.Ns = append(msg.Ns, &dns.SOA{
+						Hdr:     dns.RR_Header{Name: dns.Fqdn(zone.Domain), Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: ttl},
+						Ns:      dns.Fqdn("ns." + zone.Domain),
+						Mbox:    dns.Fqdn("admin." + zone.Domain),
+						Serial:  soaSerial(),
+						Refresh: 3600,
+						Retry:   900,
+						Expire:  604800,
+						Minttl:  ttl,
+					})
+					break
+				}
+			}
 		}
 	}
 
@@ -246,14 +294,18 @@ func main() {
 	udp := &dns.Server{Addr: cfg.Listen, Net: "udp"}
 	tcp := &dns.Server{Addr: cfg.Listen, Net: "tcp"}
 
+	// Use an error channel so that a ListenAndServe failure is logged and causes
+	// a clean exit (instead of log.Fatalf inside a goroutine which could race
+	// against the logger and produce no output before os.Exit).
+	errc := make(chan error, 2)
 	go func() {
 		if err := udp.ListenAndServe(); err != nil {
-			log.Fatalf("UDP: %v", err)
+			errc <- fmt.Errorf("UDP: %w", err)
 		}
 	}()
 	go func() {
 		if err := tcp.ListenAndServe(); err != nil {
-			log.Fatalf("TCP: %v", err)
+			errc <- fmt.Errorf("TCP: %w", err)
 		}
 	}()
 
@@ -261,7 +313,12 @@ func main() {
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
+
+	select {
+	case err := <-errc:
+		log.Fatalf("server error: %v", err)
+	case <-sig:
+	}
 
 	_ = udp.Shutdown()
 	_ = tcp.Shutdown()

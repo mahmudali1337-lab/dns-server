@@ -1,0 +1,24 @@
+[Unit]
+Description=Custom DNS Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/dns-server
+ExecStart=/opt/dns-server/dns-server /opt/dns-server/config.yaml
+
+# Restart automatically on any failure (the main reason records disappear)
+Restart=always
+RestartSec=3s
+
+# Log stdout/stderr to journald — view with: journalctl -u dns-server -f
+StandardOutput=journal
+StandardError=journal
+
+# Hard limits to prevent resource exhaustion
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
