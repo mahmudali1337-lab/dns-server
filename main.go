@@ -20,7 +20,8 @@ type Config struct {
 
 type Zone struct {
 	Domain string   `yaml:"domain"`
-	IP     string   `yaml:"ip"`
+	IP     string   `yaml:"ip"`  // backward compat: single IP
+	IPs    []string `yaml:"ips"` // multiple IPs for round-robin
 	TTL    uint32   `yaml:"ttl"`
 	MX     []MXRec  `yaml:"mx"`
 	TXT    []TXTRec `yaml:"txt"`
@@ -38,11 +39,30 @@ type TXTRec struct {
 }
 
 type Sub struct {
-	Name string `yaml:"name"`
-	IP   string `yaml:"ip"`
+	Name string   `yaml:"name"`
+	IP   string   `yaml:"ip"`  // backward compat: single IP
+	IPs  []string `yaml:"ips"` // multiple IPs for round-robin
 }
 
 var zones []Zone
+
+// allIPs merges the legacy single-IP field with the new multi-IP list.
+// The single IP comes first and duplicates are skipped.
+func allIPs(ip string, ips []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	if ip != "" {
+		seen[ip] = true
+		out = append(out, ip)
+	}
+	for _, i := range ips {
+		if i != "" && !seen[i] {
+			seen[i] = true
+			out = append(out, i)
+		}
+	}
+	return out
+}
 
 func soaSerial() uint32 {
 	t := time.Now().UTC()
@@ -100,8 +120,10 @@ func handle(w dns.ResponseWriter, r *dns.Msg) {
 				answered = true
 				switch q.Qtype {
 				case dns.TypeA:
-					if ip := safeParseIP(zone.IP); ip != nil {
-						msg.Answer = append(msg.Answer, &dns.A{Hdr: hdr(fqdn, dns.TypeA), A: ip})
+					for _, raw := range allIPs(zone.IP, zone.IPs) {
+						if ip := safeParseIP(raw); ip != nil {
+							msg.Answer = append(msg.Answer, &dns.A{Hdr: hdr(fqdn, dns.TypeA), A: ip})
+						}
 					}
 				case dns.TypeNS:
 					msg.Answer = append(msg.Answer,
@@ -137,8 +159,10 @@ func handle(w dns.ResponseWriter, r *dns.Msg) {
 						Minttl:  300,
 					})
 				case dns.TypeANY:
-					if ip := safeParseIP(zone.IP); ip != nil {
-						msg.Answer = append(msg.Answer, &dns.A{Hdr: hdr(fqdn, dns.TypeA), A: ip})
+					for _, raw := range allIPs(zone.IP, zone.IPs) {
+						if ip := safeParseIP(raw); ip != nil {
+							msg.Answer = append(msg.Answer, &dns.A{Hdr: hdr(fqdn, dns.TypeA), A: ip})
+						}
 					}
 					msg.Answer = append(msg.Answer,
 						&dns.NS{Hdr: hdr(fqdn, dns.TypeNS), Ns: ns},
@@ -164,16 +188,21 @@ func handle(w dns.ResponseWriter, r *dns.Msg) {
 			case ns:
 				answered = true
 				if q.Qtype == dns.TypeA || q.Qtype == dns.TypeANY {
-					if ip := safeParseIP(zone.IP); ip != nil {
-						msg.Answer = append(msg.Answer, &dns.A{Hdr: hdr(ns, dns.TypeA), A: ip})
+					// NS glue record — use first available IP
+					if first := allIPs(zone.IP, zone.IPs); len(first) > 0 {
+						if ip := safeParseIP(first[0]); ip != nil {
+							msg.Answer = append(msg.Answer, &dns.A{Hdr: hdr(ns, dns.TypeA), A: ip})
+						}
 					}
 				}
 
 			case ns2:
 				answered = true
 				if q.Qtype == dns.TypeA || q.Qtype == dns.TypeANY {
-					if ip := safeParseIP(zone.IP); ip != nil {
-						msg.Answer = append(msg.Answer, &dns.A{Hdr: hdr(ns2, dns.TypeA), A: ip})
+					if first := allIPs(zone.IP, zone.IPs); len(first) > 0 {
+						if ip := safeParseIP(first[0]); ip != nil {
+							msg.Answer = append(msg.Answer, &dns.A{Hdr: hdr(ns2, dns.TypeA), A: ip})
+						}
 					}
 				}
 
@@ -185,11 +214,13 @@ func handle(w dns.ResponseWriter, r *dns.Msg) {
 					}
 					answered = true
 					if q.Qtype == dns.TypeA || q.Qtype == dns.TypeANY {
-						if ip := safeParseIP(sub.IP); ip != nil {
-							msg.Answer = append(msg.Answer, &dns.A{
-								Hdr: hdr(subFqdn, dns.TypeA),
-								A:   ip,
-							})
+						for _, raw := range allIPs(sub.IP, sub.IPs) {
+							if ip := safeParseIP(raw); ip != nil {
+								msg.Answer = append(msg.Answer, &dns.A{
+									Hdr: hdr(subFqdn, dns.TypeA),
+									A:   ip,
+								})
+							}
 						}
 					}
 					break

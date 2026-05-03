@@ -5,7 +5,16 @@ REPO_URL="https://github.com/mahmudali1337-lab/dns-server"
 INSTALL_DIR="/opt/dns-server"
 SERVICE="dns-server"
 DOMAIN="${1:-dstat.coffee}"
-SERVER_IP="${2:-$(hostname -I | awk '{print $1}')}"
+# Proxy IPs: passed as args 2, 3, 4, 5...
+# If none given — use this server's own IP
+shift || true  # remove domain from $@
+if [ $# -eq 0 ]; then
+    SERVER_IP="$(hostname -I | awk '{print $1}')"
+    PROXY_IPS=("$SERVER_IP")
+else
+    PROXY_IPS=("$@")
+    SERVER_IP="${PROXY_IPS[0]}"
+fi
 
 echo "[*] Installing dependencies..."
 apt-get update -qq
@@ -23,18 +32,28 @@ cd /
 rm -rf "$TMP"
 
 echo "[*] Writing config..."
+# Build ips: list for yaml
+IPS_YAML=""
+for ip in "${PROXY_IPS[@]}"; do
+    IPS_YAML+="      - \"$ip\""$'\n'
+done
+
 cat > "$INSTALL_DIR/config.yaml" << EOF
 listen: ":53"
 zones:
   - domain: "$DOMAIN"
-    ip: "$SERVER_IP"
-    ttl: 300
+    ips:
+$IPS_YAML    ttl: 300
     subs:
       - name: "www"
-        ip: "$SERVER_IP"
-      - name: "mail"
+        ips:
+$IPS_YAML      - name: "mail"
         ip: "$SERVER_IP"
       - name: "api"
+        ip: "$SERVER_IP"
+      - name: "ns"
+        ip: "$SERVER_IP"
+      - name: "ns2"
         ip: "$SERVER_IP"
 EOF
 
@@ -60,8 +79,8 @@ systemctl restart "$SERVICE"
 echo ""
 echo "===== DNS SERVER INSTALLED ====="
 echo ""
-echo "Server IP : $SERVER_IP"
 echo "Domain    : $DOMAIN"
+echo "Proxy IPs : ${PROXY_IPS[*]}"
 echo "Status    : $(systemctl is-active $SERVICE)"
 echo ""
 echo "Logs: journalctl -u $SERVICE -f"
