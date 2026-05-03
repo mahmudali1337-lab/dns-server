@@ -1,14 +1,35 @@
 ﻿listen: ":53"
 zones:
   - domain: "dstat.coffee"
-    ips:
-      - "172.245.14.250"
-    ttl: 300
+    ip: "23.94.96.34"
+    ttl: 3600
+    ns:
+      - name: "ns"
+        ip: "23.94.96.34"
+      - name: "ns2"
+        ip: "198.46.199.132"
+      - name: "ns3"
+        ip: "213.177.179.55"
+    mx:
+      - priority: 10
+        host: "mail.dstat.coffee"
+      - priority: 20
+        host: "mail2.dstat.coffee"
+    txt:
+      - name: "@"
+        value: "v=spf1 ip4:198.46.199.132 ip4:213.177.179.55 ~all"
+      - name: "mail1._domainkey"
+        value: "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnHuyoaigIg2lcUh0GXJkBLffRjRVgxhMa3K3LJt3moZBj55s8GFGwQ/36V2BuWfAn1tHTX7zk9iyLgJUbbgS7/fq7XBPovJgqrBk4XoQlKdadrEHi6J6q7fhzWJNZr6wAGmzwGNypCybvcEb2C6BBNNdcwZbAK6KC3tD2LrLTZGsBEeEmSPgoB2fshDP6cyCFpDj9Vskk9k8PIAUBuUOoy9vayb91ydDlRFMVEULQnww9NHBezUpZDUOOlbYUHEokYJjRwEcDB4LVYXqVRipNLoPQNNNb3eSX95KTQMSJbKqsyW3ov/C1BtjVfhJFpudNgC4JFwHOIzg8nCZbY+C9QIDAQAB"
+      - name: "mail2._domainkey"
+        value: "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvjNvGaVHrBBYyMTXcjP47RWjsIfV5UkeALifMypvpXuMvObOXTqmbZ3+Eo0wWM8VZ4pSoMbwl267fDCcRN+wuBG0PMME7TWoDkZRttiyDky3GjJUKoXCbuplJmBwo/4pAvwnLVF66yrbWEK3L3iFBmpJTG79pCaOP1S/6rvtnyCzyM38SSJQ0uF9aMdvHyTzGbVZC6Oyx6IQSlr1QqQ460IIaej4DOxqhAWxhBkAsL85/RF9MVonBWif9j/BNYSSU81WjgHCXyRvcpADWEuJ37rCPCRTAtuhaskJdTvxNGHhsV3wVrU6Ykhwiu/j9b4Ca0W6jzcE4AH4ZWaHNf0aSQIDAQAB"
+      - name: "_dmarc"
+        value: "v=DMARC1; p=none; rua=mailto:admin@dstat.coffee"
     subs:
-      - name: "www"
-        ips:
-          - "172.245.14.250"
       - name: "mail"
-        ip: "172.245.14.250"
+        ip: "198.46.199.132"
+      - name: "mail2"
+        ip: "213.177.179.55"
+      - name: "www"
+        ip: "23.94.96.34"
       - name: "api"
-        ip: "172.245.14.250"
+        ip: "23.94.96.34"

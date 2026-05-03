@@ -23,6 +23,7 @@ type Zone struct {
 	IP     string   `yaml:"ip"`  // backward compat: single IP
 	IPs    []string `yaml:"ips"` // multiple IPs for round-robin
 	TTL    uint32   `yaml:"ttl"`
+	NS     []NSRec  `yaml:"ns"`
 	MX     []MXRec  `yaml:"mx"`
 	TXT    []TXTRec `yaml:"txt"`
 	Subs   []Sub    `yaml:"subs"`
@@ -36,6 +37,11 @@ type MXRec struct {
 type TXTRec struct {
 	Name  string `yaml:"name"`
 	Value string `yaml:"value"`
+}
+
+type NSRec struct {
+	Name string `yaml:"name"`
+	IP   string `yaml:"ip"`
 }
 
 type Sub struct {
@@ -103,8 +109,6 @@ func handle(w dns.ResponseWriter, r *dns.Msg) {
 
 		for _, zone := range zones {
 			fqdn := dns.Fqdn(zone.Domain)
-			ns := dns.Fqdn("ns." + zone.Domain)
-			ns2 := dns.Fqdn("ns2." + zone.Domain)
 
 			ttl := zone.TTL
 			if ttl == 0 {
@@ -113,6 +117,28 @@ func handle(w dns.ResponseWriter, r *dns.Msg) {
 
 			hdr := func(name string, t uint16) dns.RR_Header {
 				return dns.RR_Header{Name: name, Rrtype: t, Class: dns.ClassINET, Ttl: ttl}
+			}
+
+			type nsEntry struct{ fqdn, ip string }
+			var nsEntries []nsEntry
+			if len(zone.NS) > 0 {
+				for _, n := range zone.NS {
+					nsEntries = append(nsEntries, nsEntry{dns.Fqdn(n.Name + "." + zone.Domain), n.IP})
+				}
+			} else {
+				ip0 := ""
+				if first := allIPs(zone.IP, zone.IPs); len(first) > 0 {
+					ip0 = first[0]
+				}
+				nsEntries = []nsEntry{
+					{dns.Fqdn("ns." + zone.Domain), ip0},
+					{dns.Fqdn("ns2." + zone.Domain), ip0},
+				}
+			}
+			primaryNS := nsEntries[0].fqdn
+			nsFqdnIP := map[string]string{}
+			for _, n := range nsEntries {
+				nsFqdnIP[n.fqdn] = n.ip
 			}
 
 			switch q.Name {
@@ -126,10 +152,9 @@ func handle(w dns.ResponseWriter, r *dns.Msg) {
 						}
 					}
 				case dns.TypeNS:
-					msg.Answer = append(msg.Answer,
-						&dns.NS{Hdr: hdr(fqdn, dns.TypeNS), Ns: ns},
-						&dns.NS{Hdr: hdr(fqdn, dns.TypeNS), Ns: ns2},
-					)
+					for _, n := range nsEntries {
+						msg.Answer = append(msg.Answer, &dns.NS{Hdr: hdr(fqdn, dns.TypeNS), Ns: n.fqdn})
+					}
 				case dns.TypeMX:
 					for _, mx := range zone.MX {
 						msg.Answer = append(msg.Answer, &dns.MX{
@@ -150,7 +175,7 @@ func handle(w dns.ResponseWriter, r *dns.Msg) {
 				case dns.TypeSOA:
 					msg.Answer = append(msg.Answer, &dns.SOA{
 						Hdr:     hdr(fqdn, dns.TypeSOA),
-						Ns:      ns,
+						Ns:      primaryNS,
 						Mbox:    dns.Fqdn("admin." + zone.Domain),
 						Serial:  soaSerial(),
 						Refresh: 3600,
@@ -164,10 +189,9 @@ func handle(w dns.ResponseWriter, r *dns.Msg) {
 							msg.Answer = append(msg.Answer, &dns.A{Hdr: hdr(fqdn, dns.TypeA), A: ip})
 						}
 					}
-					msg.Answer = append(msg.Answer,
-						&dns.NS{Hdr: hdr(fqdn, dns.TypeNS), Ns: ns},
-						&dns.NS{Hdr: hdr(fqdn, dns.TypeNS), Ns: ns2},
-					)
+					for _, n := range nsEntries {
+						msg.Answer = append(msg.Answer, &dns.NS{Hdr: hdr(fqdn, dns.TypeNS), Ns: n.fqdn})
+					}
 					for _, mx := range zone.MX {
 						msg.Answer = append(msg.Answer, &dns.MX{
 							Hdr:        hdr(fqdn, dns.TypeMX),
@@ -185,28 +209,16 @@ func handle(w dns.ResponseWriter, r *dns.Msg) {
 					}
 				}
 
-			case ns:
-				answered = true
-				if q.Qtype == dns.TypeA || q.Qtype == dns.TypeANY {
-					// NS glue record — use first available IP
-					if first := allIPs(zone.IP, zone.IPs); len(first) > 0 {
-						if ip := safeParseIP(first[0]); ip != nil {
-							msg.Answer = append(msg.Answer, &dns.A{Hdr: hdr(ns, dns.TypeA), A: ip})
-						}
-					}
-				}
-
-			case ns2:
-				answered = true
-				if q.Qtype == dns.TypeA || q.Qtype == dns.TypeANY {
-					if first := allIPs(zone.IP, zone.IPs); len(first) > 0 {
-						if ip := safeParseIP(first[0]); ip != nil {
-							msg.Answer = append(msg.Answer, &dns.A{Hdr: hdr(ns2, dns.TypeA), A: ip})
-						}
-					}
-				}
-
 			default:
+				if nsIP, ok := nsFqdnIP[q.Name]; ok {
+					answered = true
+					if q.Qtype == dns.TypeA || q.Qtype == dns.TypeANY {
+						if ip := safeParseIP(nsIP); ip != nil {
+							msg.Answer = append(msg.Answer, &dns.A{Hdr: hdr(q.Name, dns.TypeA), A: ip})
+						}
+					}
+					break
+				}
 				for _, sub := range zone.Subs {
 					subFqdn := dns.Fqdn(sub.Name + "." + zone.Domain)
 					if subFqdn != q.Name {
@@ -256,9 +268,13 @@ func handle(w dns.ResponseWriter, r *dns.Msg) {
 					if ttl == 0 {
 						ttl = 300
 					}
+					zoneNS := dns.Fqdn("ns." + zone.Domain)
+					if len(zone.NS) > 0 {
+						zoneNS = dns.Fqdn(zone.NS[0].Name + "." + zone.Domain)
+					}
 					msg.Ns = append(msg.Ns, &dns.SOA{
 						Hdr:     dns.RR_Header{Name: dns.Fqdn(zone.Domain), Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: ttl},
-						Ns:      dns.Fqdn("ns." + zone.Domain),
+						Ns:      zoneNS,
 						Mbox:    dns.Fqdn("admin." + zone.Domain),
 						Serial:  soaSerial(),
 						Refresh: 3600,
@@ -277,9 +293,13 @@ func handle(w dns.ResponseWriter, r *dns.Msg) {
 					if ttl == 0 {
 						ttl = 300
 					}
+					zoneNS := dns.Fqdn("ns." + zone.Domain)
+					if len(zone.NS) > 0 {
+						zoneNS = dns.Fqdn(zone.NS[0].Name + "." + zone.Domain)
+					}
 					msg.Ns = append(msg.Ns, &dns.SOA{
 						Hdr:     dns.RR_Header{Name: dns.Fqdn(zone.Domain), Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: ttl},
-						Ns:      dns.Fqdn("ns." + zone.Domain),
+						Ns:      zoneNS,
 						Mbox:    dns.Fqdn("admin." + zone.Domain),
 						Serial:  soaSerial(),
 						Refresh: 3600,
